@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Password Leak Checker</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 2rem;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 500px;
+            margin: 1rem;
+            position: relative;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 2rem;
+            font-size: 1.8rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: #555;
+            font-weight: 500;
+        }
+
+        input[type="password"], input[type="text"] {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid #e1e1e1;
+            border-radius: 10px;
+            font-size: 1rem;
+            transition: border-color 0.3s;
+        }
+
+        input[type="password"]:focus, input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button {
+            width: 100%;
+            padding: 0.75rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .result {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            border-radius: 10px;
+            text-align: center;
+            font-weight: 500;
+        }
+
+        .result.safe {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .result.danger {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .result.error {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+        }
+
+        .auth-form {
+            text-align: center;
+        }
+
+        .main-app {
+            display: none;
+        }
+
+        .main-app.authenticated {
+            display: block;
+        }
+
+        .logout-btn {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            width: auto;
+        }
+
+        .info {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: #e9ecef;
+            border-radius: 10px;
+            font-size: 0.9rem;
+            color: #6c757d;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #ffffff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <button class="logout-btn" onclick="logout()" style="display: none;" id="logoutBtn">Выйти</button>
+        
+        <!-- Форма аутентификации -->
+        <div id="authForm" class="auth-form">
+            <h1>🔐 Вход в систему</h1>
+            <div class="form-group">
+                <label for="masterPassword">Пароль для доступа:</label>
+                <input type="password" id="masterPassword" placeholder="Введите пароль доступа">
+            </div>
+            <button onclick="authenticate()" id="authBtn">Войти</button>
+            <div id="authResult"></div>
+        </div>
+
+        <!-- Основное приложение -->
+        <div id="mainApp" class="main-app">
+            <h1>🔍 Проверка паролей на утечки</h1>
+            <div class="form-group">
+                <label for="passwordInput">Введите пароль для проверки:</label>
+                <input type="password" id="passwordInput" placeholder="Ваш пароль">
+            </div>
+            <button onclick="checkPassword()" id="checkBtn">Проверить пароль</button>
+            <div id="result"></div>
+            <div class="info">
+                <strong>Как это работает:</strong><br>
+                • Пароль хешируется локально (SHA-1)<br>
+                • Отправляются только первые 5 символов хеша<br>
+                • Проверка происходит через API Have I Been Pwned<br>
+                • Ваш пароль никогда не покидает браузер в открытом виде
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Проверка аутентификации при загрузке
+        window.onload = function() {
+            if (sessionStorage.getItem('authToken')) {
+                showMainApp();
+            }
+        };
+
+        async function authenticate() {
+            const password = document.getElementById('masterPassword').value;
+            const resultDiv = document.getElementById('authResult');
+            const authBtn = document.getElementById('authBtn');
+            
+            if (!password) {
+                resultDiv.innerHTML = '<div class="result error">Введите пароль</div>';
+                return;
+            }
+
+            authBtn.disabled = true;
+            authBtn.innerHTML = '<span class="loading"></span> Проверяем...';
+            
+            try {
+                const response = await fetch('/api/auth', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ password: password })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    sessionStorage.setItem('authToken', data.token);
+                    showMainApp();
+                    resultDiv.innerHTML = '';
+                } else {
+                    resultDiv.innerHTML = '<div class="result error">Неверный пароль</div>';
+                }
+            } catch (error) {
+                console.error('Authentication error:', error);
+                resultDiv.innerHTML = '<div class="result error">Ошибка соединения</div>';
+            } finally {
+                authBtn.disabled = false;
+                authBtn.innerHTML = 'Войти';
+            }
+        }
+
+        function showMainApp() {
+            document.getElementById('authForm').style.display = 'none';
+            document.getElementById('mainApp').classList.add('authenticated');
+            document.getElementById('logoutBtn').style.display = 'block';
+        }
+
+        function logout() {
+            sessionStorage.removeItem('authToken');
+            document.getElementById('authForm').style.display = 'block';
+            document.getElementById('mainApp').classList.remove('authenticated');
+            document.getElementById('logoutBtn').style.display = 'none';
+            document.getElementById('masterPassword').value = '';
+            document.getElementById('passwordInput').value = '';
+            document.getElementById('result').innerHTML = '';
+        }
+
+        // Обработка Enter в поле пароля доступа
+        document.getElementById('masterPassword').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                authenticate();
+            }
+        });
+
+        // Обработка Enter в поле проверки пароля
+        document.getElementById('passwordInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                checkPassword();
+            }
+        });
+
+        async function sha1(str) {
+            const encoder = new TextEncoder();
+            const data = encoder.encode(str);
+            const hashBuffer = await crypto.subtle.digest('SHA-1', data);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            return hashHex.toUpperCase();
+        }
+
+        async function checkPassword() {
+            const password = document.getElementById('passwordInput').value;
+            const resultDiv = document.getElementById('result');
+            const checkBtn = document.getElementById('checkBtn');
+            
+            if (!password) {
+                resultDiv.innerHTML = '<div class="result error">Пожалуйста, введите пароль</div>';
+                return;
+            }
+
+            checkBtn.disabled = true;
+            checkBtn.innerHTML = '<span class="loading"></span> Проверяем...';
+            resultDiv.innerHTML = '';
+
+            try {
+                const hash = await sha1(password);
+                const prefix = hash.substring(0, 5);
+                const suffix = hash.substring(5);
+
+                const response = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.text();
+                const lines = data.split('\n');
+                
+                let found = false;
+                let count = 0;
+
+                for (const line of lines) {
+                    const [hashSuffix, hashCount] = line.split(':');
+                    if (hashSuffix === suffix) {
+                        found = true;
+                        count = parseInt(hashCount);
+                        break;
+                    }
+                }
+
+                if (found) {
+                    resultDiv.innerHTML = `
+                        <div class="result danger">
+                            ⚠️ <strong>Пароль найден в базе утечек!</strong><br>
+                            Этот пароль встречается в ${count.toLocaleString()} утечках данных.<br>
+                            Рекомендуется сменить пароль.
+                        </div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="result safe">
+                            ✅ <strong>Пароль безопасен!</strong><br>
+                            Этот пароль не найден в известных базах утечек.
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                resultDiv.innerHTML = `
+                    <div class="result error">
+                        ❌ <strong>Ошибка при проверке</strong><br>
+                        Проверьте соединение с интернетом
+                    </div>
+                `;
+            } finally {
+                checkBtn.disabled = false;
+                checkBtn.textContent = 'Проверить пароль';
+            }
+        }
+    </script>
+</body>
+</html>
