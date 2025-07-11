@@ -2,10 +2,9 @@
   "name": "password-checker",
   "version": "1.0.0",
   "description": "Password leak checker with authentication",
-  "main": "index.js",
   "scripts": {
     "dev": "vercel dev",
-    "build": "echo 'Static site ready'"
+    "build": "echo 'No build step required'"
   },
   "keywords": [
     "password",
